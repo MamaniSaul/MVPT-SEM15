@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multi-VP Tree Image Search</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+        .image-container {
+            margin: 10px;
+            text-align: center;
+        }
+        .image-container img {
+            max-width: 100px;
+            max-height: 100px;
+            display: block;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <h1>Multi-VP Tree Image Search</h1>
+
+    <!-- Sección para cargar imágenes -->
+    <div>
+        <h2>Cargar Imágenes</h2>
+        <input type="file" id="imageUploader" multiple accept="image/*">
+    </div>
+
+    <!-- Sección para realizar la búsqueda -->
+    <div>
+        <h2>Buscar Imágenes Similares</h2>
+        <label for="queryVector">Vector de Consulta:</label>
+        <input type="text" id="queryVector" placeholder="Ejemplo: 0.5, 0.2, 0.7, ..." size="50">
+        <button onclick="searchImages()">Buscar</button>
+    </div>
+
+    <!-- Contenedor para mostrar imágenes y resultados -->
+    <div id="content">
+        <!-- Div para mostrar las imágenes cargadas -->
+        <div id="images">
+            <h2>Imágenes en la Base de Datos</h2>
+        </div>
+
+        <!-- Div para mostrar la imagen de consulta seleccionada -->
+        <div id="queryImage" style="display: none;">
+            <h2>Imagen de Consulta</h2>
+        </div>
+
+        <!-- Div para mostrar los resultados de la búsqueda -->
+        <div id="results" style="display: none;">
+            <h2>Resultados de la Búsqueda</h2>
+        </div>
+    </div>
+
+    <script>
+        class MultiVPTree {
+            constructor(points, numReferences = 2, leafSize = 10) {
+                this.numReferences = numReferences;
+                this.leafSize = leafSize;
+                this.root = this.buildTree(points);
+            }
+            
+            // Función para construir el árbol
+            buildTree(points) {
+                if (points.length <= this.leafSize) {
+                    return { points: points };
+                }
+
+                // Seleccionar puntos de referencia aleatoriamente
+                const references = [];
+                for (let i = 0; i < this.numReferences; i++) {
+                    const index = Math.floor(Math.random() * points.length);
+                    references.push(points[index]);
+                }
+
+                // Calcular distancias a los puntos de referencia
+                const distances = points.map(point => references.map(ref => this.distance(point.vector, ref.vector)));
+
+                // Particionar puntos en subconjuntos
+                const medianDistances = references.map((_, i) => this.median(distances.map(d => d[i])));
+                const leftPoints = points.filter((_, idx) => distances[idx].every((d, i) => d <= medianDistances[i]));
+                const rightPoints = points.filter((_, idx) => !leftPoints.includes(points[idx]));
+
+                // Crear nodo actual
+                return {
+                    references: references,
+                    medianDistances: medianDistances,
+                    left: this.buildTree(leftPoints),
+                    right: this.buildTree(rightPoints)
+                };
+            }
+
+            // Función para buscar imágenes similares
+            search(query, k = 1) {
+                return this._search(this.root, query, k);
+            }
+
+            _search(node, query, k) {
+                if (node.points) {
+                    // Caso base: nodo hoja
+                    const distances = node.points.map(point => this.distance(query, point.vector));
+                    return node.points.map((point, idx) => [point, distances[idx]]).sort((a, b) => a[1] - b[1]).slice(0, k);
+                }
+
+                // Calcular distancias a los puntos de referencia
+                const queryDistances = node.references.map(ref => this.distance(query, ref.vector));
+
+                // Determinar qué rama explorar
+                const exploreLeft = queryDistances.every((d, i) => d <= node.medianDistances[i]);
+                const bestBranch = exploreLeft ? node.left : node.right;
+                const otherBranch = exploreLeft ? node.right : node.left;
+
+                // Explorar la rama más prometedora
+                let bestResults = this._search(bestBranch, query, k);
+
+                // Posiblemente explorar la otra rama
+                const bestDistances = bestResults.map(result => result[1]);
+                if (queryDistances.some((d, i) => d <= node.medianDistances[i] + Math.max(...bestDistances))) {
+                    const otherResults = this._search(otherBranch, query, k);
+                    bestResults = bestResults.concat(otherResults).sort((a, b) => a[1] - b[1]).slice(0, k);
+                }
+
+                return bestResults;
+            }
+
+            // Función para calcular la distancia euclidiana entre dos puntos
+            distance(a, b) {
+                return Math.sqrt(a.reduce((sum, ai, i) => sum + (ai - b[i]) ** 2, 0));
+            }
+
+            // Función para calcular la mediana de un conjunto de valores
+            median(values) {
+                values.sort((a, b) => a - b);
+                const mid = Math.floor(values.length / 2);
+                return values.length % 2 === 0 ? (values[mid - 1] + values[mid]) / 2 : values[mid];
+            }
+        }
+
+        // Inicializar el árbol Multi-VP con las imágenes cargadas
+        let imageVectors = []; // Array para almacenar las imágenes y sus vectores
+
+        // Función para cargar imágenes desde el input file
+        document.getElementById('imageUploader').addEventListener('change', function(event) {
+            const files = event.target.files;
+            const imagesDiv = document.getElementById('images');
+
+            for (let file of files) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const imgSrc = e.target.result;
+                    const vector = [Math.random(), Math.random()]; // Generar un vector aleatorio para demostración
+                    const imageId = imageVectors.length + 1;
+
+                    imageVectors.push({ id: imageId, vector: vector, url: imgSrc });
+                    imagesDiv.innerHTML += `
+                        <div class="image-container">
+                            <img src="${imgSrc}" alt="Image ${imageId}" onclick="setQueryImage(${imageId})">
+                            <p>Imagen ID: ${imageId}</p>
+                            <p>Vector: ${vector.join(', ')}</p>
+                        </div>
+                    `;
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        // Función para establecer la imagen de consulta y mostrarla
+        function setQueryImage(imageId) {
+            const image = imageVectors.find(img => img.id === imageId);
+            const queryImageDiv = document.getElementById('queryImage');
+            queryImageDiv.innerHTML = '<h2>Imagen de Consulta</h2>';
+            queryImageDiv.innerHTML += `
+                <div class="image-container">
+                    <img src="${image.url}" alt="Query Image">
+                    <p>Imagen ID: ${image.id}</p>
+                    <p>Vector: ${image.vector.join(', ')}</p>
+                </div>
+            `;
+            document.getElementById('queryVector').value = image.vector.join(', ');
+
+            // Mostrar la sección de imagen de consulta y ocultar los resultados
+            document.getElementById('queryImage').style.display = 'block';
+            document.getElementById('results').style.display = 'none';
+        }
+
+        // Función para buscar imágenes similares usando el árbol Multi-VP
+        function searchImages() {
+            const queryInput = document.getElementById('queryVector').value;
+            const queryVector = queryInput.split(',').map(Number);
+
+            if (queryVector.length !== 2 || queryVector.some(isNaN)) {
+                alert("Por favor, ingresa un vector de características válido con la misma longitud que los vectores de la base de datos.");
+                return;
+            }
+
+            const tree = new MultiVPTree(imageVectors);
+            const k = 3;  // Número de imágenes similares a buscar
+            const similarImages = tree.search(queryVector, k);
+
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '<h2>Resultados de la Búsqueda</h2>';
+
+            if (similarImages.length === 0) {
+                resultsDiv.innerHTML += '<p>No se encontraron imágenes similares.</p>';
+            } else {
+                similarImages.forEach(result => {
+                    const image = imageVectors.find(img => img.vector.toString() === result[0].vector.toString());
+                    resultsDiv.innerHTML += `
+                        <div class="image-container">
+                            <img src="${image.url}" alt="Image ${image.id}">
+                            <p>Imagen ID: ${image.id}</p>
+                            <p>Vector: ${image.vector.join(', ')}</p>
+                            <p>Distancia: ${result[1].toFixed(3)}</p>
+                        </div>
+                    `;
+                });
+            }
+
+            // Mostrar la sección de resultados y ocultar la imagen de consulta
+            document.getElementById('results').style.display = 'block';
+            document.getElementById('queryImage').style.display = 'none';
+        }
+    </script>
+</body>
+</html>
